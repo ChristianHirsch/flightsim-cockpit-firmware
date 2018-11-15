@@ -64,9 +64,9 @@ PROGMEM const char usbHidReportDescriptor[44] = { /* USB report descriptor, size
  */
 
 int  p_in[6] = {PC4, PC3, PC2, PC1, PB2, PC0};
-int *p_ip[6] = {&PINC, &PINC, &PINC, &PINC, &PINB, &PINC};
-int  p_ou[4] = {PD1, PD0, PC5, PB5};
-int *p_op[4] = {&PORTD, &PORTD, &PORTC, &PORTB};
+volatile uint8_t * const p_ip[6] = {&PINC, &PINC, &PINC, &PINC, &PINB, &PINC};
+int  p_ou[5] = {PD1, PD0, PC5, PB5, PB4};
+volatile uint8_t * const p_op[5] = {&PORTD, &PORTD, &PORTC, &PORTB, &PORTB};
 
 typedef struct{
     uchar   switches;
@@ -124,6 +124,24 @@ void init_inputs()
     reportBuffer.encoder[1] = 0xFF / 2;
 }
 
+void init_pwm()
+{
+    DDRB  |=  (1 << PB3); // done in init inputs
+    //PORTB &= ~(1 << PB3);
+
+    // set PWM for 50% duty cycle
+    OCR2A = 128;
+
+    // set non-inverting mode
+    //TCCR2A |= (1 << COM0A1);
+
+    // set fast PWM Mode
+    TCCR2A |= (1 << WGM21) | (1 << WGM20);
+
+    // set prescaler to 8 and starts PWM
+    TCCR2B |= (1 << CS21);
+}
+
 void read_inputs()
 {
     for(int i=0; i<6; i++)
@@ -174,13 +192,22 @@ void read_inputs()
 
 void write_outputs()
 {
-    for(int i=0; i < 4; i++)
+    for(int i=0; i < 5; i++)
     {
         if(reportBuffer.switches & (1 << i))
             *(p_op[i]) |=  (1<<p_ou[i]);
         else
             *(p_op[i]) &= ~(1<<p_ou[i]);
     }
+
+    // set PWM value
+    OCR2A = reportBuffer.encoder[0];
+    // enable PWM on PB3
+    if(reportBuffer.switches & (1 << 6))
+        TCCR2A |= 1<<COM2A1;
+    // disable PWM on PB3
+    else
+        TCCR2A &= ~(1<<COM2A1);
 }
 
 void read_encoder1()
@@ -237,10 +264,9 @@ void read_encoder2()
 
 /* ------------------------------------------------------------------------- */
 
-int __attribute__((noreturn)) main(void)
+int main(void)
 {
-uchar   i;
-    
+    uchar   i;
     init_inputs();
 
     wdt_enable(WDTO_1S);
@@ -265,8 +291,7 @@ uchar   i;
     sei();
     DBG1(0x01, 0, 0);       /* debug output: main loop starts */
 
-    int pin_a, pin_b, encoder_value;
-    int encoder_last[] = {0, 0};
+    init_pwm();
 
     /* main event loop */
     for(;;)
@@ -276,7 +301,7 @@ uchar   i;
         read_inputs();
         read_encoder1();
         read_encoder2();
-        //write_outputs();
+        write_outputs();
 
         wdt_reset();
         usbPoll();
