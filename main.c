@@ -30,34 +30,28 @@ publish any hardware using these IDs! This is for demonstration only!
 /* ----------------------------- USB interface ----------------------------- */
 /* ------------------------------------------------------------------------- */
 
-PROGMEM const char usbHidReportDescriptor[56] = { /* USB report descriptor, size must match usbconfig.h */
+PROGMEM const char usbHidReportDescriptor[44] = { /* USB report descriptor, size must match usbconfig.h */
     0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
-    0x09, 0x05,                    // USAGE (Mouse)
+    0x09, 0x05,                    // USAGE (GamePad)
     0xa1, 0x01,                    // COLLECTION (Application)
     0x09, 0x01,                    //   USAGE (Pointer)
     0xA1, 0x00,                    //   COLLECTION (Physical)
     0x05, 0x09,                    //     USAGE_PAGE (Button)
     0x19, 0x01,                    //     USAGE_MINIMUM
-    0x29, 0x06,                    //     USAGE_MAXIMUM
+    0x29, 0x08,                    //     USAGE_MAXIMUM
     0x15, 0x00,                    //     LOGICAL_MINIMUM (0)
     0x25, 0x01,                    //     LOGICAL_MAXIMUM (1)
     0x75, 0x01,                    //     REPORT_SIZE (1)
-    0x95, 0x06,                    //     REPORT_COUNT (6)
+    0x95, 0x08,                    //     REPORT_COUNT (8)
     0x81, 0x02,                    //     INPUT (Data,Var,Abs)
-    0x75, 0x02,                    //     REPORT_SIZE (2)
-    0x95, 0x01,                    //     REPORT_COUNT (1)
-    0x81, 0x03,                    //     INPUT (Const,Var,Abs)
-    0x05, 0x09,                    //     USAGE_PAGE (Button)
-    0x19, 0x01,                    //     USAGE_MINIMUM
-    0x29, 0x02,                    //     USAGE_MAXIMUM
+    0x05, 0x01,                    //     USAGE_PAGE (Generic Desktop)
+    0x09, 0x30,                    //     USAGE (X)
+    0x09, 0x31,                    //     USAGE (Y)
     0x15, 0x00,                    //     LOGICAL_MINIMUM (0)
-    0x25, 0x01,                    //     LOGICAL_MAXIMUM (1)
-    0x75, 0x03,                    //     REPORT_SIZE (3)
+    0x25, 0xff,                    //     LOGICAL_MAXIMUM (255)
+    0x75, 0x08,                    //     REPORT_SIZE (8)
     0x95, 0x02,                    //     REPORT_COUNT (2)
     0x81, 0x02,                    //     INPUT (Data,Var,Abs)
-    0x75, 0x02,                    //     REPORT_SIZE (2)
-    0x95, 0x01,                    //     REPORT_COUNT (1)
-    0x81, 0x03,                    //     INPUT (Const,Var,Abs)
     0xC0,                          //   END_COLLECTION
     0xC0,                          // END COLLECTION
 };
@@ -76,7 +70,7 @@ int *p_op[4] = {&PORTD, &PORTD, &PORTC, &PORTB};
 
 typedef struct{
     uchar   switches;
-    uchar   encoders;
+    uchar   encoder[2];
 }report_t;
 
 static report_t reportBuffer;
@@ -126,7 +120,119 @@ void init_inputs()
     DDRD |=  (0x03);    // set PD0-1 to output
 
     reportBuffer.switches = 0x00;
-    reportBuffer.encoders = 0x00;
+    reportBuffer.encoder[0] = 0xFF / 2;
+    reportBuffer.encoder[1] = 0xFF / 2;
+}
+
+void read_inputs()
+{
+    for(int i=0; i<6; i++)
+    {
+        if(*p_ip[i] & (1 << p_in[i]))
+        {
+            reportBuffer.switches |=  (1<<i);
+        }
+        else
+        {
+            reportBuffer.switches &= ~(1<<i);
+        }
+    }
+
+    static char pd4_debounce = 0;
+    static char pd4_set = 0;
+    static char pd5_debounce = 0;
+    static char pd5_set = 0;
+
+    if(PIND & (1 << PD4))
+        pd4_debounce++;
+    else
+    {
+        pd4_set = 0;
+        pd4_debounce = 0;
+    }
+
+    if(PIND & (1 << PD5))
+        pd5_debounce++;
+    else
+    {
+        pd5_set = 0;
+        pd5_debounce = 0;
+    }
+
+    if(pd4_debounce > 3 && !pd4_set)
+    {
+        pd4_set = 1;
+        reportBuffer.switches ^= (1 << 6);
+    }
+    
+    if(pd5_debounce > 3 && !pd5_set)
+    {
+        pd5_set = 1;
+        reportBuffer.switches ^= (1 << 7);
+    }
+}
+
+void write_outputs()
+{
+    for(int i=0; i < 4; i++)
+    {
+        if(reportBuffer.switches & (1 << i))
+            *(p_op[i]) |=  (1<<p_ou[i]);
+        else
+            *(p_op[i]) &= ~(1<<p_ou[i]);
+    }
+}
+
+void read_encoder1()
+{
+    static int encoder_last = 0;
+    int pin_a = (PINB & (1 << PB0)) != 0;
+    int pin_b = (PINB & (1 << PB1)) != 0;
+    int encoder_value = (pin_a | (pin_b << 1)) * 3;
+    encoder_value = ((encoder_value & 0x01) << 1) | ((encoder_value & 0x02) >> 1);
+
+    int diff = encoder_value - encoder_last;
+    encoder_last = encoder_value;
+    if(diff != 0)
+    {
+        if(diff == -1 || diff > 1)
+        {
+            if(reportBuffer.encoder[0] > 0)
+                reportBuffer.encoder[0]--;
+        }
+        else if(diff == 1 || diff < -1)
+        {
+            if(reportBuffer.encoder[0] < 255)
+                reportBuffer.encoder[0]++;
+        }
+
+    }
+}
+
+void read_encoder2()
+{
+    static int encoder_last = 0;
+    int pin_a = (PIND & (1 << PD6)) != 0;
+    int pin_b = (PIND & (1 << PD7)) != 0;
+    int encoder_value = (pin_a | (pin_b << 1)) * 3;
+    encoder_value = ((encoder_value & 0x01) << 1) | ((encoder_value & 0x02) >> 1);
+
+    int diff = encoder_value - encoder_last;
+    encoder_last = encoder_value;
+    if(diff != 0)
+    {
+        if(diff == -1 || diff > 1)
+        {
+            if(reportBuffer.encoder[1] > 0)
+                reportBuffer.encoder[1]--;
+        }
+        else if(diff == 1 || diff < -1)
+        {
+            if(reportBuffer.encoder[1] < 255)
+                reportBuffer.encoder[1]++;
+        }
+
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -158,27 +264,24 @@ uchar   i;
     usbDeviceConnect();
     sei();
     DBG1(0x01, 0, 0);       /* debug output: main loop starts */
-    for(;;){                /* main event loop */
+
+    int pin_a, pin_b, encoder_value;
+    int encoder_last[] = {0, 0};
+
+    /* main event loop */
+    for(;;)
+    {
         DBG1(0x02, 0, 0);   /* debug output: main loop iterates */
+
+        read_inputs();
+        read_encoder1();
+        read_encoder2();
+        //write_outputs();
+
         wdt_reset();
         usbPoll();
-        if(usbInterruptIsReady()){
-            for(int i=0; i<6; i++)
-            {
-                if(*p_ip[i] & (1 << p_in[i]))
-                {
-                    reportBuffer.switches |=  (1<<i);
-                    if(i < 1)
-                        *(p_op[i]) |=  (1<<p_ou[i]);
-                }
-                else
-                {
-                    reportBuffer.switches &= ~(1<<i);
-                    if(i < 1)
-                        *(p_op[i]) &= ~(1<<p_ou[i]);
-                }
-            }
-
+        if(usbInterruptIsReady())
+        {
             /* called after every poll of the interrupt endpoint */
             DBG1(0x03, 0, 0);   /* debug output: interrupt report prepared */
 
